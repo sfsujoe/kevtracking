@@ -1,0 +1,34 @@
+# Device inventories, reports, screenshots and other operational data stay local.
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+*.tsv
+*.png
+*.jpg
+*.jpeg
+*.pdf
+*.log
+*.ndjson
+*.zip
+/outputs/
+/screenshots/
+/pilot/validation/
+/pilot/archive/
+
+# Bundled runtime links, caches and local configuration.
+**/node_modules/
+**/__pycache__/
+*.py[cod]
+.env
+.env.*
+.aws/
+.codex/
+.agents/
+*.pem
+*.key
+*.pfx
+
+# Local regression checks that depend on private University fixtures.
+/pilot/scripts/test_report.py
+/pilot/scripts/verify_workbook.mjs

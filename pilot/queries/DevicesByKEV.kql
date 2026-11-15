@@ -1,0 +1,94 @@
+// Current vulnerability snapshot, one row per Defender DeviceId.
+// Run with the portal's hunting time range set to 30 days.
+// Dates below describe the export, not a historical TVM snapshot.
+// Overdue preserves the supplied query's rule: dueDate < export time (UTC).
+let ReportAsOfUtc = now();
+let ContextWindowStartUtc = ReportAsOfUtc - 30d;
+let CisaKEV = (
+    externaldata(
+        cveID: string, vendorProject: string, product: string,
+        vulnerabilityName: string, dateAdded: datetime,
+        shortDescription: string, requiredAction: string, dueDate: datetime,
+        knownRansomwareCampaignUse: string, notes: string, cwes: string
+    )
+    [@"https://www.cisa.gov/sites/default/files/csv/known_exploited_vulnerabilities.csv"]
+    with (format="csv", ignoreFirstRecord=true)
+    | extend CveId = toupper(trim(@"\s+", cveID))
+    | where isnotempty(CveId)
+    | summarize arg_max(dateAdded, *) by CveId
+    | project CveId, dueDate, knownRansomwareCampaignUse
+);
+let LatestDeviceInfo = (
+    DeviceInfo
+    | summarize arg_max(Timestamp, *) by DeviceId
+    | project DeviceId, DeviceInfoLastSeen=Timestamp, MachineGroup,
+              IsInternetFacing, ExposureLevel, AssetValue
+);
+let LatestIdentityInfo = (
+    IdentityInfo
+    | where isnotempty(OnPremSid)
+    | summarize arg_max(Timestamp, *) by OnPremSid
+    | project OnPremSid, AccountUpn, AccountDisplayName
+);
+let RecentUsers = (
+    DeviceLogonEvents
+    | where Timestamp between (ContextWindowStartUtc .. ReportAsOfUtc)
+    | where ActionType == "LogonSuccess"
+    | where LogonType in~ ("Interactive", "Local", "CachedInteractive", "RemoteInteractive", "Unlock")
+    | where isnotempty(AccountName)
+    | where AccountName !endswith "$"
+    | where AccountName !startswith "dwm-" and AccountName !startswith "umfd-"
+    | where AccountName !in~ ("system", "local service", "network service", "anonymous logon")
+    | where AccountSid !in ("S-1-5-18", "S-1-5-19", "S-1-5-20")
+    | extend UserKey=iff(isnotempty(AccountSid), AccountSid, strcat(AccountDomain, "\\", AccountName))
+    | summarize arg_max(Timestamp, AccountSid, AccountName, AccountDomain) by DeviceId, UserKey
+    | join kind=leftouter LatestIdentityInfo on $left.AccountSid == $right.OnPremSid
+    | extend UserName=iff(isnotempty(AccountUpn), tostring(split(AccountUpn, "@")[0]), AccountName)
+    | extend UserLabel=iff(isnotempty(AccountDisplayName), strcat(UserName, " — ", AccountDisplayName), UserName)
+    | sort by DeviceId asc, Timestamp desc, UserKey asc
+    | summarize RecentUsers=make_list(UserLabel, 3) by DeviceId
+);
+let DeviceAlerts = (
+    AlertInfo
+    | where Timestamp between (ContextWindowStartUtc .. ReportAsOfUtc)
+    | summarize arg_max(Timestamp, Title) by AlertId
+    | join kind=inner (
+        AlertEvidence
+        | where Timestamp between (ContextWindowStartUtc .. ReportAsOfUtc)
+        | where EntityType == "Machine" and isnotempty(DeviceId)
+        | distinct AlertId, DeviceId
+    ) on AlertId
+    | summarize AlertsLast30Days=count(), AlertTitles=make_set(Title, 1000) by DeviceId
+);
+let DeviceCves = (
+    DeviceTvmSoftwareVulnerabilities
+    | where isnotempty(DeviceId) and isnotempty(CveId)
+    | extend CveId=toupper(CveId)
+    // Multiple software installations must count as one CVE per device.
+    | summarize DeviceName=take_any(DeviceName), OSPlatform=take_any(OSPlatform),
+                OSVersion=take_any(OSVersion) by DeviceId, CveId
+    | join kind=inner CisaKEV on CveId
+);
+DeviceCves
+| summarize
+    DeviceName=take_any(DeviceName), OSPlatform=take_any(OSPlatform), OSVersion=take_any(OSVersion),
+    KEVCount=count(), KEVs=make_set(CveId, 10000),
+    OverdueKEVs=countif(isnotnull(dueDate) and dueDate < ReportAsOfUtc),
+    OverdueCves=make_set_if(CveId, isnotnull(dueDate) and dueDate < ReportAsOfUtc, 10000),
+    RansomwareLinkedKEVs=countif(knownRansomwareCampaignUse =~ "Known"),
+    OverdueRansomwareLinkedKEVs=countif(knownRansomwareCampaignUse =~ "Known" and isnotnull(dueDate) and dueDate < ReportAsOfUtc),
+    MissingDueDateKEVs=countif(isnull(dueDate))
+    by DeviceId
+| join kind=leftouter LatestDeviceInfo on DeviceId
+| join kind=leftouter RecentUsers on DeviceId
+| join kind=leftouter DeviceAlerts on DeviceId
+| extend AlertsLast30Days=coalesce(AlertsLast30Days, 0),
+         ReportAsOfUtc=ReportAsOfUtc, ContextWindowStartUtc=ContextWindowStartUtc,
+         CveListTruncated=(KEVCount > array_length(KEVs) or OverdueKEVs > array_length(OverdueCves))
+| project DeviceId, DeviceName, OSPlatform, OSVersion, MachineGroup,
+          IsInternetFacing, ExposureLevel, AssetValue, DeviceInfoLastSeen,
+          KEVCount, KEVs, OverdueKEVs, OverdueCves, RansomwareLinkedKEVs,
+          OverdueRansomwareLinkedKEVs, MissingDueDateKEVs, CveListTruncated,
+          RecentUsers, AlertsLast30Days, AlertTitles, ReportAsOfUtc, ContextWindowStartUtc
+// Keep non-overdue records for tracking. The workbook's Weekly report filters to OverdueKEVs > 0.
+| sort by OverdueKEVs desc, IsInternetFacing desc, OverdueRansomwareLinkedKEVs desc, DeviceName asc, DeviceId asc
