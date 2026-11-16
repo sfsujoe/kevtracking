@@ -9,8 +9,10 @@ MANUAL_COLUMNS = {
     'NeedsEscalation': 'Escalation', 'EscalationReason': 'Escalation reason',
     'Circumstances': 'Circumstances', 'Notes': 'Notes', 'LastReviewed': 'Last reviewed',
     'IdentityMatch': 'Identity match',
+    'SFSUTag': 'SFSU Tag', 'ATTag': 'AT Tag', 'SerialNo': 'Serial No.',
 }
-STATUSES = ['Unspecified', 'Ticket open', 'In progress', 'Resolved']
+ASSET_FIELDS = ['SFSUTag', 'ATTag', 'SerialNo']
+STATUSES = ['—', 'Ticket open', 'In progress', 'Resolved']
 IDENTITY_VALUES = ['Verified DeviceId', 'DeviceId from export', 'Unique name match; verify',
                    'No current match', 'Ambiguous name; review', 'Unverified DeviceId']
 REGISTER_EXTRA = ['TrackingKey', 'LastObservedReportDate', 'LastOverdueKEVs', 'LastKEVCount',
@@ -19,7 +21,8 @@ HISTORY_HEADERS = ['Report date', 'Device', 'Status', 'ServiceNow tickets', 'Ove
                    'All KEVs', 'Observed in export', 'Event', 'Changed fields', 'Notes',
                    'Escalation', 'Escalation reason', 'Circumstances', 'Last reviewed',
                    'DeviceId', 'SnapshotId', 'Captured UTC', 'Identity match', 'KEVs',
-                   'OverdueCves', 'TrackingKey']
+                   'OverdueCves', 'TrackingKey', 'SFSU Tag', 'AT Tag', 'Serial No.',
+                   'Weekly appearance']
 HISTORY_MANUAL = dict(MANUAL_COLUMNS, RemediationStatus='Status')
 
 
@@ -32,8 +35,10 @@ def utc_now():
 
 
 def normalize_manual(field, value):
+    if field == 'RemediationStatus' and value == 'Unspecified':
+        return '—'
     if value is None or (isinstance(value, str) and not value.strip()):
-        return {'RemediationStatus': 'Unspecified', 'NeedsEscalation': 'No',
+        return {'RemediationStatus': '—', 'NeedsEscalation': 'No',
                 'IdentityMatch': 'Unverified DeviceId'}.get(field, '')
     if field == 'LastReviewed':
         if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 2958465:
@@ -83,7 +88,7 @@ def seed_register(tracking, records, report_date):
     return result
 
 
-def history_rows(tracking, records, snapshot_id, report_date, captured, event, changes=None):
+def history_rows(tracking, records, snapshot_id, report_date, captured, event, changes=None, appearances=None):
     source = {norm(r['DeviceId']): r for r in records}
     rows = []
     for t in tracking:
@@ -95,6 +100,7 @@ def history_rows(tracking, records, snapshot_id, report_date, captured, event, c
         row.update({'Report date': report_date, 'Device': t['DeviceName'], 'DeviceId': t['DeviceId'],
                     'TrackingKey': key, 'SnapshotId': snapshot_id, 'Captured UTC': captured,
                     'Event': event, 'Observed in export': current is not None,
+                    'Weekly appearance': (appearances or {}).get(t['DeviceId'], ''),
                     'Changed fields': ', '.join(MANUAL_COLUMNS[f] for f in changes.get(key, [])) if changes else ''})
         if current:
             row.update({'Overdue KEVs': current['OverdueKEVs'], 'All KEVs': current['KEVCount'],
@@ -114,7 +120,8 @@ def collect_saved_edits(tracking, weekly, records, history, guide, formula_field
     source = {norm(r['DeviceId']): r for r in records}
     formula_fields = formula_fields or {}
     history = copy.deepcopy(history)
-    modern = str(guide.get('Schema version', '')) == '2'
+    version = str(guide.get('Schema version', ''))
+    modern = version in ('2', '3')
     snapshot_id = str(guide.get('Snapshot id') or uuid.uuid4())
     baselines = {}
     if modern:
@@ -122,7 +129,9 @@ def collect_saved_edits(tracking, weekly, records, history, guide, formula_field
             if h['SnapshotId'] == snapshot_id and h['Event'] == 'Generated':
                 if h['TrackingKey'] in baselines:
                     raise ValueError('Duplicate history baseline for the current snapshot')
-                baselines[h['TrackingKey']] = {f: normalize_manual(f, h[HISTORY_MANUAL[f]]) for f in MANUAL_COLUMNS}
+                baselines[h['TrackingKey']] = {
+                    f: normalize_manual(f, h.get(HISTORY_MANUAL[f], '') if version == '2' and f in ASSET_FIELDS
+                                        else h[HISTORY_MANUAL[f]]) for f in MANUAL_COLUMNS}
         if any(r['TrackingKey'] not in baselines for r in register):
             raise ValueError('History baseline is missing for a tracked device; choose an intact saved report')
     else:
@@ -173,10 +182,11 @@ def collect_saved_edits(tracking, weekly, records, history, guide, formula_field
 def finalize_snapshot(payload, history, captured=None):
     captured = captured or utc_now()
     payload['tracking'] = seed_register(payload['tracking'], payload['records'], payload['reportDate'])
-    payload['schemaVersion'] = 2
+    payload['schemaVersion'] = 3
     payload['snapshotId'] = str(uuid.uuid4())
     payload['generatedUtc'] = captured
     payload['historyHeaders'] = HISTORY_HEADERS
     payload['history'] = list(history) + history_rows(payload['tracking'], payload['records'],
-        payload['snapshotId'], payload['reportDate'], captured, 'Generated')
+        payload['snapshotId'], payload['reportDate'], captured, 'Generated',
+        appearances={norm(r['device']['DeviceId']): r.get('appearance', '') for r in payload.get('report', [])})
     return payload

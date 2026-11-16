@@ -5,6 +5,9 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
 import prepare_report as p
 
@@ -70,7 +73,7 @@ class PublicImportTests(unittest.TestCase):
         result=p.prepare(self.write([self.row]),'2026-11-16')
         self.assertEqual(result['summary']['reportDevices'],1)
         self.assertEqual(result['summary']['overdue'],1)
-        self.assertEqual(result['tracking'][0]['RemediationStatus'],'Unspecified')
+        self.assertEqual(result['tracking'][0]['RemediationStatus'],'—')
         self.assertEqual(result['history'][0]['Event'],'Generated')
 
 

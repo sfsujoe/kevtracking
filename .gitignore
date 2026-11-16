@@ -13,6 +13,7 @@
 *.zip
 /outputs/
 /screenshots/
+/Troubleshooting/
 /pilot/validation/
 /pilot/archive/
 
@@ -30,5 +31,5 @@
 *.pfx
 
 # Local regression checks that depend on private University fixtures.
-/pilot/scripts/test_report.py
-/pilot/scripts/verify_workbook.mjs
+/pilot/tests/test_report.py
+/pilot/tests/verify_workbook.mjs

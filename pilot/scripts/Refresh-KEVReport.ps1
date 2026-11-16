@@ -23,9 +23,10 @@ param(
     [switch]$UpgradeReport
 )
 $ErrorActionPreference = 'Stop'
+$pilotRoot = Split-Path -Parent $PSScriptRoot
 if ($Gui -or $PSBoundParameters.Count -eq 0) {
-    . (Join-Path $PSScriptRoot 'scripts\ReportGui.ps1')
-    $guiOptions = @{ PilotRoot = $PSScriptRoot }
+    . (Join-Path $PSScriptRoot 'ReportGui.ps1')
+    $guiOptions = @{ PilotRoot = $pilotRoot }
     foreach ($name in @('ExportPath', 'ReportDate', 'TrackingWorkbook', 'OutputPath')) {
         if ($PSBoundParameters.ContainsKey($name)) { $guiOptions[$name] = $PSBoundParameters[$name] }
     }
@@ -55,7 +56,7 @@ $packagesPath = Join-Path $runtimeRoot 'node\node_modules'
 if (!(Test-Path -LiteralPath $nodeExecutable) -or !(Test-Path -LiteralPath $pythonExecutable)) {
     throw 'Codex bundled Node.js/Python runtime was not found. Open this project in Codex and check workspace dependencies.'
 }
-$moduleLink = Join-Path $PSScriptRoot 'node_modules'
+$moduleLink = Join-Path $pilotRoot 'node_modules'
 $moduleInfo = Get-Item -LiteralPath $moduleLink -Force -ErrorAction SilentlyContinue
 if ($moduleInfo -and $moduleInfo.LinkType -eq 'Junction' -and @($moduleInfo.Target)[0] -ne $packagesPath) {
     # Repoint only the utility's dependency junction, never a real directory.
@@ -65,10 +66,10 @@ if ($moduleInfo -and $moduleInfo.LinkType -eq 'Junction' -and @($moduleInfo.Targ
 if (!$moduleInfo) {
     New-Item -ItemType Junction -Path $moduleLink -Target $packagesPath | Out-Null
 }
-$runDirectory = Join-Path $PSScriptRoot ('validation\run-' + [guid]::NewGuid().ToString('N'))
+$runDirectory = Join-Path $pilotRoot ('validation\run-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $runDirectory | Out-Null
 $jsonPath = Join-Path $runDirectory 'prepared.json'
-$prepareArgs = @((Join-Path $PSScriptRoot 'scripts\prepare_report.py'), '--json', $jsonPath)
+$prepareArgs = @((Join-Path $PSScriptRoot 'prepare_report.py'), '--json', $jsonPath)
 $previousPath = $null
 if (!$UpgradeReport) { $prepareArgs += @('--export', $sourcePath, '--date', $ReportDate) }
 if ($TrackingWorkbook) {
@@ -78,10 +79,10 @@ if ($TrackingWorkbook) {
     else { $prepareArgs += @('--previous', $previousPath) }
 } else {
     # Only the first build may bootstrap from the original annotated workbooks.
-    if (Get-ChildItem -LiteralPath $PSScriptRoot -Filter 'KEV-Report-*.xlsx' -File) {
+    if (Get-ChildItem -LiteralPath $pilotRoot -Filter 'KEV-Report-*.xlsx' -File) {
         throw 'A pilot report already exists. Supply -TrackingWorkbook so its edits are retained.'
     }
-    $projectRoot = Split-Path -Parent $PSScriptRoot
+    $projectRoot = Split-Path -Parent $pilotRoot
     $nov2 = Join-Path $projectRoot 'AdvancedHuntingResults-AT - Date Passed CISA Known Exploited Vulnerabilities_20261102.xlsx'
     $nov9 = Join-Path $projectRoot 'AdvancedHuntingResults-AT - Date Passed CISA Known Exploited Vulnerabilities_20261109.xlsx'
     # Preserve the local one-time migration when its inputs are available.
@@ -90,18 +91,18 @@ if ($TrackingWorkbook) {
         $prepareArgs += @('--legacy', ('2026-11-02|' + $nov2), '--legacy', ('2026-11-09|' + $nov9))
     }
 }
-& $pythonExecutable @prepareArgs
+& $pythonExecutable -B @prepareArgs
 if ($LASTEXITCODE -ne 0) { throw 'Source validation or tracking migration failed. No workbook was generated.' }
 if ($previousPath) {
-    $archiveDirectory = Join-Path $PSScriptRoot 'archive'
+    $archiveDirectory = Join-Path $pilotRoot 'archive'
     New-Item -ItemType Directory -Force -Path $archiveDirectory | Out-Null
     $archiveName = [datetime]::UtcNow.ToString('yyyyMMddTHHmmssZ') + '_' + [guid]::NewGuid().ToString('N') + '_' + [IO.Path]::GetFileName($previousPath)
     $archivePath = Join-Path $archiveDirectory $archiveName
     Copy-Item -LiteralPath $previousPath -Destination $archivePath -ErrorAction Stop
     Write-Output ('Archived saved input: ' + $archivePath)
 }
-& $nodeExecutable (Join-Path $PSScriptRoot 'scripts\build_report.mjs') $jsonPath $destinationPath
+& $nodeExecutable (Join-Path $PSScriptRoot 'build_report.mjs') $jsonPath $destinationPath
 if ($LASTEXITCODE -ne 0) { throw 'Workbook generation failed. Inspect the validation output before retrying.' }
-& $pythonExecutable (Join-Path $PSScriptRoot 'scripts\finish_workbook.py') $destinationPath
+& $pythonExecutable -B (Join-Path $PSScriptRoot 'finish_workbook.py') $destinationPath
 if ($LASTEXITCODE -ne 0) { throw 'The report was generated but the register could not be hidden; inspect the output before using it.' }
 Write-Output ('Created ' + $destinationPath)

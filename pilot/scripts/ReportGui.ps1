@@ -63,7 +63,7 @@ function ConvertTo-KEVProcessArgument {
 function Get-KEVWorkerArguments {
     param([string]$PilotRoot, $Request)
     $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
-        (ConvertTo-KEVProcessArgument (Join-Path $PilotRoot 'Refresh-KEVReport.ps1')),
+        (ConvertTo-KEVProcessArgument (Join-Path $PilotRoot 'scripts\Refresh-KEVReport.ps1')),
         '-ExportPath', (ConvertTo-KEVProcessArgument $Request.ExportPath),
         '-ReportDate', $Request.ReportDate,
         '-OutputPath', (ConvertTo-KEVProcessArgument $Request.OutputPath))

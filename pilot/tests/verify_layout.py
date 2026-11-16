@@ -2,8 +2,11 @@
 import json
 import re
 import sys
+sys.dont_write_bytecode = True
 import zipfile
 import xml.etree.ElementTree as ET
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
 import prepare_report as p
 
@@ -34,7 +37,7 @@ old_guide={r['Item']:r['Details'] for r in p.table_records(original['Guide'],'It
 new_guide={r['Item']:r['Details'] for r in p.table_records(updated['Guide'],'Item')}
 for field in ('Report date','Previous report date','Defender source'):
     assert old_guide[field]==new_guide[field]
-assert new_guide['Schema version']==2
+assert new_guide['Schema version']==3
 assert new_guide['Editing model']=='Weekly report'
 register,_,_,history,changes=p.load_saved_state(updated)
 assert not changes

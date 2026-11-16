@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'ReportGui.ps1')
 $pilotRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $pilotRoot 'scripts\ReportGui.ps1')
 
 function Assert-True {
     param([bool]$Condition, [string]$Message)
@@ -29,7 +29,8 @@ if (!(Test-Path -LiteralPath $ExportPath)) { throw 'Export argument did not surv
 Copy-Item -LiteralPath $TrackingWorkbook -Destination $OutputPath
 Write-Output ('Created ' + $OutputPath)
 '@
-Set-Content -LiteralPath (Join-Path $testRoot 'Refresh-KEVReport.ps1') -Value $worker -Encoding UTF8
+New-Item -ItemType Directory -Path (Join-Path $testRoot 'scripts') | Out-Null
+Set-Content -LiteralPath (Join-Path $testRoot 'scripts\Refresh-KEVReport.ps1') -Value $worker -Encoding UTF8
 $csvPath = Join-Path $testRoot 'MDE export & users.csv'
 [pscustomobject]@{ DeviceId = 'csv-test'; DeviceName = 'CSV test'; KEVCount = 1; OverdueKEVs = 1; KEVs = '["CVE-2026-0001"]' } | Export-Csv -LiteralPath $csvPath -NoTypeInformation -Encoding UTF8
 $exportPath = $csvPath
@@ -156,7 +157,7 @@ try {
     Assert-True ((Get-FileHash -LiteralPath $copyPath).Hash -eq (Get-FileHash -LiteralPath $previousPath).Hash) 'Worker arguments or copy destination changed.'
     Write-Output 'Hidden worker, responsive timer, and success handling passed.'
 
-    Set-Content -LiteralPath (Join-Path $testRoot 'Refresh-KEVReport.ps1') -Value 'Write-Error "Expected fixture failure"; exit 7' -Encoding UTF8
+    Set-Content -LiteralPath (Join-Path $testRoot 'scripts\Refresh-KEVReport.ps1') -Value 'Write-Error "Expected fixture failure"; exit 7' -Encoding UTF8
     $ui.Inputs.FileName.Text = 'failed report.xlsx'
     Invoke-TestClick $ui.CreateButton
     Assert-True $ui.State.Busy ('Expected failure worker to start: ' + $ui.Status.Text)

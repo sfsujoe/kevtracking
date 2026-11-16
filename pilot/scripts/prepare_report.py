@@ -11,15 +11,16 @@ import re
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
-from tracking_state import (REGISTER_EXTRA, collect_saved_edits, finalize_snapshot)
+from tracking_state import (ASSET_FIELDS, REGISTER_EXTRA, STATUSES, collect_saved_edits,
+                            finalize_snapshot, normalize_manual)
 
 NS = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
-STATUSES = ["Unspecified", "Ticket open", "In progress", "Resolved"]
 TRACK_HEADERS = ["DeviceId", "DeviceName", "RemediationStatus", "NeedsEscalation",
                  "EscalationReason", "ServiceNowTickets", "Circumstances", "Notes",
                  "LastReviewed", "IdentityMatch", "LegacyColor", "AnnotationSource"]
 TRACK_HEADERS += REGISTER_EXTRA
+TRACK_HEADERS += ASSET_FIELDS
 REQUIRED_EXPORT_FIELDS = ("DeviceId", "DeviceName", "KEVCount", "OverdueKEVs", "KEVs")
 COUNT_FIELDS = ("KEVCount", "OverdueKEVs", "RansomwareLinkedKEVs",
                 "OverdueRansomwareLinkedKEVs", "MissingDueDateKEVs",
@@ -266,7 +267,7 @@ def legacy_tracking(events):
         key = normal(event["name"])
         t = merged.setdefault(key, {h: "" for h in TRACK_HEADERS})
         t["DeviceName"] = event["name"]
-        t["RemediationStatus"] = t["RemediationStatus"] or "Unspecified"
+        t["RemediationStatus"] = t["RemediationStatus"] or "—"
         t["NeedsEscalation"] = t["NeedsEscalation"] or "No"
         if event["color"]:
             t["LegacyColor"] = event["color"]
@@ -317,13 +318,14 @@ def merge_tracking(records, tracking):
     for row in records:
         if row["DeviceId"] not in existing:
             t = {h: "" for h in TRACK_HEADERS}
-            t.update(DeviceId=row["DeviceId"], DeviceName=row["DeviceName"], RemediationStatus="Unspecified",
+            t.update(DeviceId=row["DeviceId"], DeviceName=row["DeviceName"], RemediationStatus="—",
                      NeedsEscalation="No", IdentityMatch="DeviceId from export")
             tracking.append(t)
             existing[row["DeviceId"]] = t
         else:
             existing[row["DeviceId"]]["DeviceName"] = row["DeviceName"]
     for t in tracking:
+        t['RemediationStatus'] = normalize_manual('RemediationStatus', t.get('RemediationStatus'))
         if t["RemediationStatus"] not in STATUSES:
             raise ValueError(f"Unknown remediation status: {t['RemediationStatus']}")
         if t["NeedsEscalation"] not in ("Yes", "No"):
@@ -352,9 +354,11 @@ def prepare(export, report_date, previous=None, legacy_paths=()):
     all_names = collections.Counter(normal(x["DeviceName"]) for x in records)
     events, baseline, comparison = [], {}, {}
     previous_records, previous_date, history = [], "", []
+    previous_weekly_ids = set()
     if previous:
         book = read_xlsx(previous)
         tracking, previous_records, guide, history, _ = load_saved_state(book)
+        previous_weekly_ids = {normal(r['DeviceId']) for r in table_records(book['Weekly report'], 'Device')}
         previous_date = str(guide.get("Report date", ""))
         if previous_date and report_date < previous_date:
             raise ValueError("Report date precedes the tracking workbook; refusing to roll tracking backward")
@@ -368,6 +372,7 @@ def prepare(export, report_date, previous=None, legacy_paths=()):
             else:
                 comparison = counts
         tracking = legacy_tracking(events)
+    known_ids = {normal(t['DeviceId']) for t in tracking if t.get('DeviceId')}
     tracking = merge_tracking(records, tracking)
     tracked = {t["DeviceId"]: t for t in tracking if t["DeviceId"]}
     current_ids = {r["DeviceId"] for r in records}
@@ -379,7 +384,7 @@ def prepare(export, report_date, previous=None, legacy_paths=()):
 
     for t in tracking:
         if not t["DeviceId"] or t["DeviceId"] not in current_ids:
-            if t["LegacyColor"] or any(t.get(h) for h in ("ServiceNowTickets", "Circumstances", "Notes")) or t["RemediationStatus"] != "Unspecified" or t["NeedsEscalation"] == "Yes":
+            if t["LegacyColor"] or any(t.get(h) for h in ("ServiceNowTickets", "Circumstances", "Notes", *ASSET_FIELDS)) or t["RemediationStatus"] != "—" or t["NeedsEscalation"] == "Yes":
                 review("Tracked device not observed", t["DeviceName"], t["DeviceId"], "Tracking retained. Absence from this export does not establish remediation.")
         if t["IdentityMatch"] in ("Unique name match; verify", "Unverified DeviceId"):
             review("Verify migrated identity", t["DeviceName"], t["DeviceId"], "Legacy annotations matched by unique full name. Verify, then set IdentityMatch to Verified DeviceId.")
@@ -411,6 +416,7 @@ def prepare(export, report_date, previous=None, legacy_paths=()):
             review("CISA due date missing", row["DeviceName"], device_id, "At least one KEV has no due date and cannot be classified as overdue.")
         if row["OverdueKEVs"] > 0:
             output.append({"device": row, "previous": previous_count, "comparison": comparison_method,
+                           "appearance": '' if device_id in previous_weekly_ids else 'Returning' if device_id in known_ids else 'New',
                            "recentUsers": format_recent_users(row.get("RecentUsers", ""), row.get("OSPlatform", ""))})
     if previous:
         for device_id, row in prev.items():
@@ -459,6 +465,8 @@ def prepare_existing_report(path):
     if len(by_id) != len(records):
         raise ValueError("Duplicate DeviceIds in the saved Defender import")
     report = []
+    appearances = {normal(h['DeviceId']): h.get('Weekly appearance', '') for h in history
+                   if h.get('SnapshotId') == guide.get('Snapshot id') and h.get('Event') == 'Generated'}
     saved_rows = {normal(row['DeviceId']): row for row in report_rows}
     order = {normal(row['DeviceId']): index for index, row in enumerate(report_rows)}
     devices = sorted((r for r in records if r['OverdueKEVs'] > 0),
@@ -468,6 +476,7 @@ def prepare_existing_report(path):
         previous = row.get("Previous overdue", "")
         report.append({"device": device, "previous": previous if previous != "" else None,
                        "comparison": "Saved comparison",
+                       "appearance": appearances.get(normal(device['DeviceId']), ''),
                        "recentUsers": format_recent_users(device.get("RecentUsers", ""), device.get("OSPlatform", ""))})
     reviews = [[r["Review item"], r["Device"], r["DeviceId"], r["Detail"]]
                for r in table_records(book["Review"], "Review item")]
