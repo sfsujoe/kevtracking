@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import sys
+from unittest.mock import patch
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
@@ -75,6 +76,49 @@ class PublicImportTests(unittest.TestCase):
         self.assertEqual(result['summary']['overdue'],1)
         self.assertEqual(result['tracking'][0]['RemediationStatus'],'—')
         self.assertEqual(result['history'][0]['Event'],'Generated')
+
+    def test_vulnerability_counts_are_numeric_and_old_exports_remain_unknown(self):
+        self.assertNotIn('DiscoveredVulnerabilities', p.read_export(self.write([self.row]))[0])
+        row=dict(self.row, DiscoveredVulnerabilities=10, CriticalVulnerabilities=2, HighVulnerabilities=3)
+        actual=p.read_export(self.write([row]))[0]
+        self.assertEqual([actual[f] for f in p.VULNERABILITY_COLUMNS], [10,2,3])
+        blank=dict(self.row, **dict.fromkeys(p.VULNERABILITY_COLUMNS, ''))
+        self.assertTrue(all(p.read_export(self.write([blank]))[0][f]=='' for f in p.VULNERABILITY_COLUMNS))
+
+    def test_invalid_or_partial_vulnerability_counts_fail(self):
+        row=dict(self.row, DiscoveredVulnerabilities=10, CriticalVulnerabilities=2, HighVulnerabilities=3)
+        for field,value in [('DiscoveredVulnerabilities',-1),('CriticalVulnerabilities',1.5),
+                            ('HighVulnerabilities','invalid'),('HighVulnerabilities',''),
+                            ('DiscoveredVulnerabilities',4)]:
+            with self.subTest(field=field,value=value):
+                with self.assertRaises(ValueError):
+                    p.read_export(self.write([dict(row, **{field:value})]))
+        partial=dict(self.row, DiscoveredVulnerabilities=10)
+        with self.assertRaisesRegex(ValueError,'all three'):
+            p.read_export(self.write([partial]))
+        too_few=dict(row, DiscoveredVulnerabilities=1, CriticalVulnerabilities=0, HighVulnerabilities=0)
+        with self.assertRaisesRegex(ValueError,'KEVCount exceeds'):
+            p.read_export(self.write([too_few]))
+
+    def test_xlsx_vulnerability_counts_use_the_same_validation(self):
+        row=dict(self.row, KEVCount=2, OverdueKEVs=1,
+                 DiscoveredVulnerabilities=10, CriticalVulnerabilities=True, HighVulnerabilities=3)
+        book={'Export':[{'values':{'A':'DeviceId'}}]}
+        with patch.object(p,'read_xlsx',return_value=book), patch.object(p,'table_records',return_value=[row]):
+            with self.assertRaisesRegex(ValueError,'nonnegative integer'):
+                p.read_export('synthetic.xlsx')
+
+    def test_weekly_report_includes_non_kev_and_zero_count_devices(self):
+        rows=[dict(self.row, DiscoveredVulnerabilities=10, CriticalVulnerabilities=2, HighVulnerabilities=3),
+              dict(self.row, DeviceId='non-kev', KEVCount=0, OverdueKEVs=0, KEVs='[]', OverdueCves='[]',
+                   DiscoveredVulnerabilities=5, CriticalVulnerabilities=1, HighVulnerabilities=2),
+              dict(self.row, DeviceId='zero', KEVCount=0, OverdueKEVs=0, KEVs='[]', OverdueCves='[]',
+                   DiscoveredVulnerabilities=0, CriticalVulnerabilities=0, HighVulnerabilities=0)]
+        result=p.prepare(self.write(rows),'2026-11-16')
+        self.assertEqual({r['device']['DeviceId'] for r in result['report']}, {'000abc','non-kev','zero'})
+        self.assertEqual(result['summary']['reportDevices'],3)
+        self.assertEqual(result['summary']['overdue'],1)
+        self.assertEqual(result['schemaVersion'],4)
 
 
 class UserLabelTests(unittest.TestCase):

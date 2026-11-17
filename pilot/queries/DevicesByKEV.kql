@@ -16,12 +16,14 @@ let CisaKEV = (
     | extend CveId = toupper(trim(@"\s+", cveID))
     | where isnotempty(CveId)
     | summarize arg_max(dateAdded, *) by CveId
-    | project CveId, dueDate, knownRansomwareCampaignUse
+    | project CveId, dueDate, knownRansomwareCampaignUse, IsCisaKev=true
 );
 let LatestDeviceInfo = (
     DeviceInfo
+    | where Timestamp between (ContextWindowStartUtc .. ReportAsOfUtc) and isnotempty(DeviceId)
     | summarize arg_max(Timestamp, *) by DeviceId
-    | project DeviceId, DeviceInfoLastSeen=Timestamp, MachineGroup,
+    | project DeviceId, InfoDeviceName=DeviceName, InfoOSPlatform=OSPlatform,
+              InfoOSVersion=OSVersion, DeviceInfoLastSeen=Timestamp, MachineGroup,
               IsInternetFacing, ExposureLevel, AssetValue
 );
 let LatestIdentityInfo = (
@@ -60,26 +62,46 @@ let DeviceAlerts = (
     ) on AlertId
     | summarize AlertsLast30Days=count(), AlertTitles=make_set(Title, 1000) by DeviceId
 );
-let DeviceCves = (
+let DeviceCounts = (
     DeviceTvmSoftwareVulnerabilities
     | where isnotempty(DeviceId) and isnotempty(CveId)
-    | extend CveId=toupper(CveId)
-    // Multiple software installations must count as one CVE per device.
+    | extend CveId=toupper(trim(@"\s+", CveId)),
+             SeverityRank=case(VulnerabilitySeverityLevel =~ "Critical", 4,
+                               VulnerabilitySeverityLevel =~ "High", 3,
+                               VulnerabilitySeverityLevel =~ "Medium", 2,
+                               VulnerabilitySeverityLevel =~ "Low", 1, 0)
+    // One vulnerability per device, using the highest reported severity.
     | summarize DeviceName=take_any(DeviceName), OSPlatform=take_any(OSPlatform),
-                OSVersion=take_any(OSVersion) by DeviceId, CveId
-    | join kind=inner CisaKEV on CveId
-);
-DeviceCves
-| summarize
+                OSVersion=take_any(OSVersion), SeverityRank=max(SeverityRank) by DeviceId, CveId
+    | join kind=leftouter CisaKEV on CveId
+    | extend IsCisaKev=coalesce(IsCisaKev, false)
+    | summarize
     DeviceName=take_any(DeviceName), OSPlatform=take_any(OSPlatform), OSVersion=take_any(OSVersion),
-    KEVCount=count(), KEVs=make_set(CveId, 10000),
+    DiscoveredVulnerabilities=count(), CriticalVulnerabilities=countif(SeverityRank == 4),
+    HighVulnerabilities=countif(SeverityRank == 3),
+    KEVCount=countif(IsCisaKev), KEVs=make_set_if(CveId, IsCisaKev, 10000),
     OverdueKEVs=countif(isnotnull(dueDate) and dueDate < ReportAsOfUtc),
     OverdueCves=make_set_if(CveId, isnotnull(dueDate) and dueDate < ReportAsOfUtc, 10000),
     RansomwareLinkedKEVs=countif(knownRansomwareCampaignUse =~ "Known"),
     OverdueRansomwareLinkedKEVs=countif(knownRansomwareCampaignUse =~ "Known" and isnotnull(dueDate) and dueDate < ReportAsOfUtc),
-    MissingDueDateKEVs=countif(isnull(dueDate))
+    MissingDueDateKEVs=countif(IsCisaKev and isnull(dueDate))
     by DeviceId
-| join kind=leftouter LatestDeviceInfo on DeviceId
+);
+DeviceCounts
+| join kind=fullouter LatestDeviceInfo on DeviceId
+| extend DeviceId=coalesce(DeviceId, DeviceId1),
+         DeviceName=coalesce(InfoDeviceName, DeviceName),
+         OSPlatform=coalesce(InfoOSPlatform, OSPlatform), OSVersion=coalesce(InfoOSVersion, OSVersion),
+         DiscoveredVulnerabilities=coalesce(DiscoveredVulnerabilities, tolong(0)),
+         CriticalVulnerabilities=coalesce(CriticalVulnerabilities, tolong(0)),
+         HighVulnerabilities=coalesce(HighVulnerabilities, tolong(0))
+| project-away DeviceId1
+| extend KEVCount=coalesce(KEVCount, tolong(0)), KEVs=iff(isnull(KEVs), dynamic([]), KEVs),
+         OverdueKEVs=coalesce(OverdueKEVs, tolong(0)),
+         OverdueCves=iff(isnull(OverdueCves), dynamic([]), OverdueCves),
+         RansomwareLinkedKEVs=coalesce(RansomwareLinkedKEVs, tolong(0)),
+         OverdueRansomwareLinkedKEVs=coalesce(OverdueRansomwareLinkedKEVs, tolong(0)),
+         MissingDueDateKEVs=coalesce(MissingDueDateKEVs, tolong(0))
 | join kind=leftouter RecentUsers on DeviceId
 | join kind=leftouter DeviceAlerts on DeviceId
 | extend AlertsLast30Days=coalesce(AlertsLast30Days, 0),
@@ -88,7 +110,11 @@ DeviceCves
 | project DeviceId, DeviceName, OSPlatform, OSVersion, MachineGroup,
           IsInternetFacing, ExposureLevel, AssetValue, DeviceInfoLastSeen,
           KEVCount, KEVs, OverdueKEVs, OverdueCves, RansomwareLinkedKEVs,
+          DiscoveredVulnerabilities, CriticalVulnerabilities, HighVulnerabilities,
           OverdueRansomwareLinkedKEVs, MissingDueDateKEVs, CveListTruncated,
           RecentUsers, AlertsLast30Days, AlertTitles, ReportAsOfUtc, ContextWindowStartUtc
-// Keep non-overdue records for tracking. The workbook's Weekly report filters to OverdueKEVs > 0.
-| sort by OverdueKEVs desc, IsInternetFacing desc, OverdueRansomwareLinkedKEVs desc, DeviceName asc, DeviceId asc
+// Include devices from either inventory or vulnerability data, including zero counts.
+// Zero means no matching vulnerability records; it does not establish assessment coverage.
+| sort by OverdueKEVs desc, IsInternetFacing desc, OverdueRansomwareLinkedKEVs desc,
+          CriticalVulnerabilities desc, HighVulnerabilities desc, DiscoveredVulnerabilities desc,
+          DeviceName asc, DeviceId asc

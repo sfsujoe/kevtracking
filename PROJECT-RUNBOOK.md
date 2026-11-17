@@ -2,9 +2,9 @@
 
 Updated: 2026-11-16
 Repository: [sfsujoe/kevtracking](https://github.com/sfsujoe/kevtracking)
-Baseline before this update: `c5c8418` on `main`.
+Baseline before this update: `2cbbee8` on `main`.
 
-Current implementation: portable CMD/scripts layout, unset status shown as **—**, pink new/returning rows, manual asset identifiers with retained history and export-diagnostic moves across filesystem boundaries.
+Current implementation: all exported devices with Discovered/Critical/High vulnerability counts, backward-compatible history, portable CMD/scripts layout, unset status shown as **—**, pink new/returning rows, manual asset identifiers and export-diagnostic moves across filesystem boundaries.
 
 ## Purpose and current state
 
@@ -32,9 +32,9 @@ The report date is a label for the run. Changing it does **not** retrieve histor
 
 | Sheet | Operator use |
 | --- | --- |
-| **Weekly report** | Current devices with `OverdueKEVs > 0`; edit remediation fields here. |
+| **Weekly report** | Every current exported device, including zero counts; edit remediation fields here. |
 | **History** | Retained snapshots and saved manual changes captured when a workbook is processed. Filter by DeviceId to follow a device over time. |
-| **Defender import** | Source snapshot, including KEV-bearing devices that are not yet overdue. Use to investigate counts. |
+| **Defender import** | Complete selected source snapshot, including non-KEV and zero-count devices when supplied by the expanded query. Use to investigate counts. |
 | **Review** | Exceptions captured at generation. Changes made later appear here on the next refresh. |
 | **Guide** | Run metadata, definitions and workflow guidance. |
 | **Tracking** (hidden) | Persistent register and comparison baseline, including absent devices. Leave it to the utility. |
@@ -50,7 +50,7 @@ Editable fields on **Weekly report** are **Remediation status**, **ServiceNow ti
 | `In progress` | Orange; remediation is actively progressing. |
 | `Resolved` | Green; recorded resolution still needs to agree with fresh Defender evidence. |
 | Escalation = `Yes` | Blue device/escalation cells; progress is difficult. Add a reason. This is independent of status, so both colors can appear. |
-| New or returning device | Pink row when absent from the previous saved Weekly report, including returns after zero overdue KEVs. Status and escalation colors take priority in their cells. On a first report, all rows are new. |
+| New or returning device | Pink row when absent from the previous saved Weekly report. Upgrading from an overdue-only report can introduce previously excluded devices. Status and escalation colors take priority in their cells. On a first report, all rows are new. |
 
 Change the values to control colors. Manually applied fill colors are not tracking inputs. Clearing a manual field intentionally clears its carried-forward value. Sort the **entire table**, keeping DeviceId and imported facts with their row. Do not replace identifiers, edit imported counts or remove workbook sheets/headers to change report scope; use Excel filters instead.
 
@@ -61,9 +61,10 @@ Recent users are formatted as `912345678 (Example User), macusername, localusern
 ## Identity, counts and history rules
 
 - Normal carry-forward uses **DeviceId**. A new DeviceId with the same hostname does not automatically inherit the previous device's tickets or notes. Some original annotations were migrated by unique name and require identity review.
-- Counts represent unique device/CVE pairs, not vulnerable software installations. The Weekly report ranks overdue findings; **All KEVs** includes KEVs that are not yet overdue.
-- The source query returns devices with at least one KEV. A device with no remaining KEVs, missing telemetry or changed query visibility may disappear. Disappearance preserves its tracking record and is **not** automatic proof of resolution.
-- A device still present in the export with zero overdue KEVs leaves Weekly report but remains in the source and tracking state. Review any open-ticket follow-up.
+- Counts represent unique device/vulnerability IDs across affected software. The Weekly report ranks overdue findings first; **All KEVs** includes KEVs that are not yet overdue. The new **Discovered vulnerabilities**, **Critical vulnerabilities** and **High vulnerabilities** columns immediately follow All KEVs. Critical and High are separate subsets using the highest reported severity per device/vulnerability.
+- The expanded source query returns devices found in recent DeviceInfo inventory or current vulnerability data, including devices with no matching vulnerability records. Missing telemetry or changed query visibility may still remove a device. Disappearance preserves its tracking record and is **not** automatic proof of resolution.
+- A device still present in the export remains on Weekly report even when all counts reach zero. Zero means no matching records were returned; it does not prove assessment coverage. Review any open-ticket follow-up.
+- Older reports and KEV exports remain accepted. New count columns missing from older exports or snapshots remain blank (unavailable), never zero or copied from the current snapshot. Older exports retain their original device coverage. Use the updated `DevicesByKEV.kql` to obtain the expanded coverage and all required KEV fields; the standalone design sample queries cannot replace it directly.
 - A recorded `Resolved` device with overdue findings is flagged. Verify the findings and adjust the recorded status or remediation work as appropriate.
 - Duplicate identities, conflicting manual edits and damaged history/baseline data stop generation for investigation. Do not bypass these checks by starting a new report without its history.
 
@@ -147,7 +148,7 @@ powershell.exe -NoProfile -NonInteractive -STA -ExecutionPolicy Bypass `
 
 At the published baseline, 9 import/user-format tests, 14 tracking/history tests and the GUI checks passed, including from a clean staged source copy. These checks do not validate live tenant connectivity. After changes to workbook generation, also generate a new report and inspect its totals, formulas, editable fields, history and layout. The builder performs reconciliation checks, a formula-error scan and preview rendering.
 
-The local revision adds five tracking/asset/appearance checks and one end-to-end portable deployment check (29 Python tests total). The latter copies only the CMD and scripts to a separate path containing spaces, an ampersand and an apostrophe, then exercises refreshes from another working directory, saved asset edits, absence/return, intentional clearing, report upgrade and generated archives. It also checks saved Excel text formats, status validation and Tracking visibility. Synthetic workbooks and previews remain under `pilot\validation` for inspection. Old schema 2 workbooks are accepted; new reports use schema 3 to include the asset history baseline.
+The current synthetic suite contains 36 Python tests, including the end-to-end portable deployment check. The latter copies only the CMD and scripts to a separate path containing spaces, an ampersand and an apostrophe, then exercises refreshes from another working directory, saved asset edits, absence/return, intentional clearing, report upgrade and generated archives. It also checks saved Excel text formats, status validation, Tracking visibility, missing older counts, observed zero counts and non-KEV device inclusion. Synthetic workbooks and previews remain under `pilot\validation` for inspection. Schema 2 and 3 workbooks are accepted; new reports use schema 4 for the vulnerability counts. Continue processing schema 4 workbooks with the updated utility.
 
 Six Node checks cover export-diagnostic relocation, including simulated `EXDEV`, an absent sidecar and preservation on failures. The portable deployment check also forces `EXDEV` during its first refresh and verifies that diagnostics reach validation and Tracking is hidden before success.
 

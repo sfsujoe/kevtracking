@@ -25,7 +25,7 @@ class DirectEditingTests(unittest.TestCase):
         self.payload=s.finalize_snapshot(dict(tracking=tracking,records=self.records,reportDate='2026-11-09'),[],captured='2026-11-09T20:00:00Z')
         self.register=self.payload['tracking']
         self.history=self.payload['history']
-        self.guide={'Report date':'2026-11-09','Schema version':3,'Snapshot id':self.payload['snapshotId']}
+        self.guide={'Report date':'2026-11-09','Schema version':4,'Snapshot id':self.payload['snapshotId']}
         self.weekly=[]
         for d,t in zip(self.records,self.register):
             row=dict(Device=d['DeviceName'],DeviceId=d['DeviceId'],Exposure=d['ExposureLevel'],OS=d['OSPlatform'],**{'Overdue KEVs':d['OverdueKEVs'],'All KEVs':d['KEVCount']})
@@ -162,7 +162,7 @@ class DirectEditingTests(unittest.TestCase):
         missing=s.finalize_snapshot(dict(tracking=register,records=self.records[1:],reportDate='2026-11-16'),history)
         self.assertEqual(missing['history'][-2]['Serial No.'],'0000ABC')
         returned=s.finalize_snapshot(dict(tracking=missing['tracking'],records=self.records,reportDate='2026-11-23'),missing['history'])
-        guide={'Report date':'2026-11-23','Schema version':3,'Snapshot id':returned['snapshotId']}
+        guide={'Report date':'2026-11-23','Schema version':4,'Snapshot id':returned['snapshotId']}
         row.update({'SFSU Tag':'','AT Tag':'','Serial No.':''})
         cleared,history,changes=self.collect(weekly,returned['tracking'],returned['history'],guide)
         self.assertEqual([next(t for t in cleared if t['DeviceId']=='one')[f] for f in s.ASSET_FIELDS],['','',''])
@@ -226,6 +226,45 @@ class DirectEditingTests(unittest.TestCase):
              patch.object(p,'load_saved_state',return_value=(copy.deepcopy(self.register),previous_records[:1],self.guide,[],{})):
             returned=p.prepare('synthetic.csv','2026-11-16','previous.xlsx')
         self.assertEqual(next(r for r in returned['report'] if r['device']['DeviceId']=='two')['appearance'],'Returning')
+
+    def test_schema_three_history_and_manual_edits_migrate_without_invented_counts(self):
+        register=copy.deepcopy(self.register)
+        history=copy.deepcopy(self.history)
+        for row in register:
+            for field in s.VULNERABILITY_COLUMNS:
+                row.pop('Last'+field)
+        for row in history:
+            for column in s.VULNERABILITY_COLUMNS.values():
+                row.pop(column)
+        weekly=copy.deepcopy(self.weekly)
+        weekly[0]['Notes']='Saved in a schema 3 report'
+        guide=dict(self.guide, **{'Schema version':3})
+        result, migrated, changes=self.collect(weekly,register,history,guide)
+        self.assertEqual(result[0]['Notes'],'Saved in a schema 3 report')
+        self.assertEqual(changes, {'one':['Notes']})
+        self.assertEqual(migrated[:len(history)],history)
+        self.assertTrue(all(result[0]['Last'+f]=='' for f in s.VULNERABILITY_COLUMNS))
+        self.assertTrue(all(migrated[-1][c]=='' for c in s.VULNERABILITY_COLUMNS.values()))
+
+    def test_vulnerability_snapshots_do_not_backfill_absent_or_older_observations(self):
+        records=copy.deepcopy(self.records)
+        records[0].update(DiscoveredVulnerabilities=8,CriticalVulnerabilities=2,HighVulnerabilities=3)
+        snapshot=s.finalize_snapshot(dict(tracking=self.register,records=records,reportDate='2026-11-16'),self.history)
+        self.assertEqual(snapshot['history'][:len(self.history)],self.history)
+        current=next(h for h in snapshot['history'] if h['SnapshotId']==snapshot['snapshotId'] and h['DeviceId']=='one')
+        self.assertEqual([current[c] for c in s.VULNERABILITY_COLUMNS.values()],[8,2,3])
+        missing=s.finalize_snapshot(dict(tracking=snapshot['tracking'],records=records[1:],reportDate='2026-11-23'),snapshot['history'])
+        absent=next(h for h in missing['history'] if h['SnapshotId']==missing['snapshotId'] and h['DeviceId']=='one')
+        self.assertTrue(all(absent[c]=='' for c in s.VULNERABILITY_COLUMNS.values()))
+        self.assertEqual(next(t for t in missing['tracking'] if t['DeviceId']=='one')['LastDiscoveredVulnerabilities'],8)
+
+    def test_vulnerability_counts_on_weekly_report_cannot_be_edited(self):
+        for field,column in s.VULNERABILITY_COLUMNS.items():
+            with self.subTest(field=field):
+                weekly=copy.deepcopy(self.weekly)
+                weekly[0][column]=999
+                with self.assertRaisesRegex(ValueError,'Imported field changed'):
+                    self.collect(weekly)
 
 
 if __name__=='__main__':

@@ -22,10 +22,13 @@ for old,new in zip(before_tracking,after_tracking):
         assert new[field]==value,('Tracking',field)
 before=p.table_records(original['Weekly report'],'Device')
 after=p.table_records(updated['Weekly report'],'Device')
-assert len(after)==len(before)
+assert len(after)>=len(before)
 source={r['DeviceId']:r for r in p.table_records(updated['Defender import'],'DeviceId')}
 tracking={r['DeviceId']:r for r in p.table_records(updated['Tracking'],'DeviceId') if r['DeviceId']}
-for old,new in zip(before,after):
+assert {r['DeviceId'] for r in after} == set(source)
+after_by_id={r['DeviceId']:r for r in after}
+for old in before:
+    new=after_by_id[old['DeviceId']]
     for field in ('Device','DeviceId','Overdue KEVs','Previous overdue','Change','All KEVs','Exposure','OS'):
         assert old[field]==new[field],(field,old['DeviceId'])
     d=source[new['DeviceId']]
@@ -37,7 +40,7 @@ old_guide={r['Item']:r['Details'] for r in p.table_records(original['Guide'],'It
 new_guide={r['Item']:r['Details'] for r in p.table_records(updated['Guide'],'Item')}
 for field in ('Report date','Previous report date','Defender source'):
     assert old_guide[field]==new_guide[field]
-assert new_guide['Schema version']==3
+assert new_guide['Schema version']==4
 assert new_guide['Editing model']=='Weekly report'
 register,_,_,history,changes=p.load_saved_state(updated)
 assert not changes
@@ -66,7 +69,7 @@ with zipfile.ZipFile(updated_path) as z:
                     assert align is None or align.get('horizontal')!='center','Guide alignment changed'
                 if sh.get('name')=='Weekly report':
                     col=re.sub(r'\d','',cell.get('r'))
-                    if col in ('G','H','I','J','K','L','M','Q'):
+                    if col in ('J','K','L','M','N','O','P','T','U','V','W'):
                         assert cell.find('s:f',p.NS) is None,'Manual cell contains a lookup formula'
         if sh.get('name')=='Weekly report':
             assert xml.find('s:dataValidations',p.NS) is not None

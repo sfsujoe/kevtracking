@@ -11,7 +11,7 @@ import re
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
-from tracking_state import (ASSET_FIELDS, REGISTER_EXTRA, STATUSES, collect_saved_edits,
+from tracking_state import (ASSET_FIELDS, REGISTER_EXTRA, STATUSES, VULNERABILITY_COLUMNS, collect_saved_edits,
                             finalize_snapshot, normalize_manual)
 
 NS = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
@@ -24,7 +24,7 @@ TRACK_HEADERS += ASSET_FIELDS
 REQUIRED_EXPORT_FIELDS = ("DeviceId", "DeviceName", "KEVCount", "OverdueKEVs", "KEVs")
 COUNT_FIELDS = ("KEVCount", "OverdueKEVs", "RansomwareLinkedKEVs",
                 "OverdueRansomwareLinkedKEVs", "MissingDueDateKEVs",
-                "AlertsLast30Days", "IncidentsLast6Months")
+                "AlertsLast30Days", "IncidentsLast6Months", *VULNERABILITY_COLUMNS)
 BOOLEAN_FIELDS = ("IsInternetFacing", "CveListTruncated")
 
 
@@ -193,6 +193,29 @@ def read_csv_export(path):
     return records
 
 
+def validate_vulnerability_counts(records):
+    """Old exports omit these measures; missing observations remain unavailable."""
+    fields = set(VULNERABILITY_COLUMNS)
+    for row in records:
+        present = fields.intersection(row)
+        if not present:
+            continue
+        if present != fields:
+            raise ValueError('Supply all three vulnerability count columns or omit all three for an older export')
+        if all(row[field] in ('', None) for field in fields):
+            continue
+        for field in fields:
+            value = row[field]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0 or int(value) != value:
+                raise ValueError(f'{field} must be a nonnegative integer; all three counts must be available together')
+            row[field] = int(value)
+        total = row['DiscoveredVulnerabilities']
+        if row['CriticalVulnerabilities'] + row['HighVulnerabilities'] > total:
+            raise ValueError('Critical plus High vulnerabilities exceeds DiscoveredVulnerabilities')
+        if row['KEVCount'] > total:
+            raise ValueError('KEVCount exceeds DiscoveredVulnerabilities')
+
+
 def read_export(path):
     suffix = Path(path).suffix.lower()
     if suffix == ".csv":
@@ -237,6 +260,7 @@ def read_export(path):
                 raise ValueError(f"Invalid JSON in OverdueCves for device {row['DeviceId']}") from error
             if not isinstance(overdue, list) or not all(isinstance(cve, str) and cve for cve in overdue) or len(overdue) != len(set(overdue)) or len(overdue) != row["OverdueKEVs"] or not set(overdue).issubset(cves):
                 raise ValueError("OverdueCves does not reconcile to OverdueKEVs and KEVs")
+    validate_vulnerability_counts(records)
     return records
 
 
@@ -336,6 +360,7 @@ def merge_tracking(records, tracking):
 def load_saved_state(book):
     tracking = table_records(book['Tracking'], 'DeviceId')
     records = table_records(book['Defender import'], 'DeviceId')
+    validate_vulnerability_counts(records)
     if len({normal(r['DeviceId']) for r in records}) != len(records):
         raise ValueError('Duplicate DeviceIds in the saved Defender import')
     guide = {r['Item']: r['Details'] for r in table_records(book['Guide'], 'Item')}
@@ -414,10 +439,9 @@ def prepare(export, report_date, previous=None, legacy_paths=()):
             review("CVE list incomplete", row["DeviceName"], device_id, "Count exceeds exported CVE list length. Rerun the revised query before CVE-level comparison.")
         if row.get("MissingDueDateKEVs", 0):
             review("CISA due date missing", row["DeviceName"], device_id, "At least one KEV has no due date and cannot be classified as overdue.")
-        if row["OverdueKEVs"] > 0:
-            output.append({"device": row, "previous": previous_count, "comparison": comparison_method,
-                           "appearance": '' if device_id in previous_weekly_ids else 'Returning' if device_id in known_ids else 'New',
-                           "recentUsers": format_recent_users(row.get("RecentUsers", ""), row.get("OSPlatform", ""))})
+        output.append({"device": row, "previous": previous_count, "comparison": comparison_method,
+                       "appearance": '' if device_id in previous_weekly_ids else 'Returning' if device_id in known_ids else 'New',
+                       "recentUsers": format_recent_users(row.get("RecentUsers", ""), row.get("OSPlatform", ""))})
     if previous:
         for device_id, row in prev.items():
             if device_id not in current_ids:
@@ -426,7 +450,12 @@ def prepare(export, report_date, previous=None, legacy_paths=()):
         for key, item in baseline.items():
             if key not in all_names:
                 review("Previous name not observed", item["name"], "", "Present in the previous legacy report, absent from this export. Identity and query scope need review.")
-    output.sort(key=lambda x: (-x["device"]["OverdueKEVs"], -int(bool(x["device"].get("IsInternetFacing"))), -int(x["device"].get("RansomwareLinkedKEVs", 0) or 0), normal(x["device"]["DeviceName"]), x["device"]["DeviceId"]))
+    output.sort(key=lambda x: (-x["device"]["OverdueKEVs"], -int(bool(x["device"].get("IsInternetFacing"))),
+                              -int(x["device"].get("OverdueRansomwareLinkedKEVs", x["device"].get("RansomwareLinkedKEVs", 0)) or 0),
+                              -int(x["device"].get('CriticalVulnerabilities', 0) or 0),
+                              -int(x["device"].get('HighVulnerabilities', 0) or 0),
+                              -int(x["device"].get('DiscoveredVulnerabilities', 0) or 0),
+                              normal(x["device"]["DeviceName"]), x["device"]["DeviceId"]))
     reconciliation = []
     if comparison:
         overdue_names = collections.Counter()
@@ -469,7 +498,7 @@ def prepare_existing_report(path):
                    if h.get('SnapshotId') == guide.get('Snapshot id') and h.get('Event') == 'Generated'}
     saved_rows = {normal(row['DeviceId']): row for row in report_rows}
     order = {normal(row['DeviceId']): index for index, row in enumerate(report_rows)}
-    devices = sorted((r for r in records if r['OverdueKEVs'] > 0),
+    devices = sorted(records,
                      key=lambda r: (-r['OverdueKEVs'], order.get(normal(r['DeviceId']), len(order))))
     for device in devices:
         row = saved_rows.get(normal(device['DeviceId']), {})
@@ -483,7 +512,7 @@ def prepare_existing_report(path):
     for device in devices:
         if normal(device['DeviceId']) not in saved_rows:
             reviews.append(['Report row restored', device['DeviceName'], device['DeviceId'],
-                            'Device is still present with overdue KEVs. The deleted report row was restored; its previous comparison is unavailable.'])
+                            'Device is still present in the saved export. Its report row was restored; its previous comparison is unavailable.'])
     payload = {"reportDate": guide["Report date"], "previousDate": guide.get("Previous report date", ""),
             "source": guide["Defender source"], "trackingSource": Path(path).name,
             "records": records, "tracking": tracking, "trackingHeaders": TRACK_HEADERS,

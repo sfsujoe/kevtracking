@@ -12,17 +12,24 @@ MANUAL_COLUMNS = {
     'SFSUTag': 'SFSU Tag', 'ATTag': 'AT Tag', 'SerialNo': 'Serial No.',
 }
 ASSET_FIELDS = ['SFSUTag', 'ATTag', 'SerialNo']
+VULNERABILITY_COLUMNS = {
+    'DiscoveredVulnerabilities': 'Discovered vulnerabilities',
+    'CriticalVulnerabilities': 'Critical vulnerabilities',
+    'HighVulnerabilities': 'High vulnerabilities',
+}
 STATUSES = ['—', 'Ticket open', 'In progress', 'Resolved']
 IDENTITY_VALUES = ['Verified DeviceId', 'DeviceId from export', 'Unique name match; verify',
                    'No current match', 'Ambiguous name; review', 'Unverified DeviceId']
 REGISTER_EXTRA = ['TrackingKey', 'LastObservedReportDate', 'LastOverdueKEVs', 'LastKEVCount',
                   'LastCves', 'LastOverdueCves', 'ObservedInExport']
+REGISTER_EXTRA += ['Last' + field for field in VULNERABILITY_COLUMNS]
 HISTORY_HEADERS = ['Report date', 'Device', 'Status', 'ServiceNow tickets', 'Overdue KEVs',
                    'All KEVs', 'Observed in export', 'Event', 'Changed fields', 'Notes',
                    'Escalation', 'Escalation reason', 'Circumstances', 'Last reviewed',
                    'DeviceId', 'SnapshotId', 'Captured UTC', 'Identity match', 'KEVs',
                    'OverdueCves', 'TrackingKey', 'SFSU Tag', 'AT Tag', 'Serial No.',
                    'Weekly appearance']
+HISTORY_HEADERS += list(VULNERABILITY_COLUMNS.values())
 HISTORY_MANUAL = dict(MANUAL_COLUMNS, RemediationStatus='Status')
 
 
@@ -84,6 +91,7 @@ def seed_register(tracking, records, report_date):
             row.update(LastObservedReportDate=report_date, LastOverdueKEVs=current['OverdueKEVs'],
                        LastKEVCount=current['KEVCount'], LastCves=current['KEVs'],
                        LastOverdueCves=current.get('OverdueCves', ''))
+            row.update({'Last' + field: current.get(field, '') for field in VULNERABILITY_COLUMNS})
         result.append(row)
     return result
 
@@ -105,6 +113,7 @@ def history_rows(tracking, records, snapshot_id, report_date, captured, event, c
         if current:
             row.update({'Overdue KEVs': current['OverdueKEVs'], 'All KEVs': current['KEVCount'],
                         'KEVs': current['KEVs'], 'OverdueCves': current.get('OverdueCves', '')})
+            row.update({column: current.get(field, '') for field, column in VULNERABILITY_COLUMNS.items()})
         for field, column in HISTORY_MANUAL.items():
             row[column] = t[field]
         rows.append(row)
@@ -121,7 +130,7 @@ def collect_saved_edits(tracking, weekly, records, history, guide, formula_field
     formula_fields = formula_fields or {}
     history = copy.deepcopy(history)
     version = str(guide.get('Schema version', ''))
-    modern = version in ('2', '3')
+    modern = version in ('2', '3', '4')
     snapshot_id = str(guide.get('Snapshot id') or uuid.uuid4())
     baselines = {}
     if modern:
@@ -146,7 +155,8 @@ def collect_saved_edits(tracking, weekly, records, history, guide, formula_field
             raise ValueError('Duplicate DeviceId in Weekly report; resolve conflicting or copied rows before refreshing')
         original = source[device_id]
         for column, field in [('Device', 'DeviceName'), ('Overdue KEVs', 'OverdueKEVs'),
-                              ('All KEVs', 'KEVCount'), ('Exposure', 'ExposureLevel'), ('OS', 'OSPlatform')]:
+                              ('All KEVs', 'KEVCount'), ('Exposure', 'ExposureLevel'), ('OS', 'OSPlatform'),
+                              *((column, field) for field, column in VULNERABILITY_COLUMNS.items())]:
             if column in row and row[column] != original.get(field, ''):
                 raise ValueError(f'Imported field changed for {device_id}: {column}. Edit only the manual report columns.')
         weekly_by_id[device_id] = row
@@ -182,7 +192,7 @@ def collect_saved_edits(tracking, weekly, records, history, guide, formula_field
 def finalize_snapshot(payload, history, captured=None):
     captured = captured or utc_now()
     payload['tracking'] = seed_register(payload['tracking'], payload['records'], payload['reportDate'])
-    payload['schemaVersion'] = 3
+    payload['schemaVersion'] = 4
     payload['snapshotId'] = str(uuid.uuid4())
     payload['generatedUtc'] = captured
     payload['historyHeaders'] = HISTORY_HEADERS

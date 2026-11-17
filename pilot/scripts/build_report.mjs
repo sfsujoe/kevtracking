@@ -51,28 +51,31 @@ function section(sheet, title, note, headers, rows, tableName) {
   return end;
 }
 
-const reportHeaders = ['Device','Overdue KEVs','Previous overdue','Change','All KEVs','Recent users','Remediation status','ServiceNow tickets','Escalation','Escalation reason','Circumstances','Notes','Last reviewed','Review','Exposure','OS','Identity match','SFSU Tag','AT Tag','Serial No.','DeviceId'];
+const vulnerabilityFields=['DiscoveredVulnerabilities','CriticalVulnerabilities','HighVulnerabilities'];
+const vulnerabilityHeaders=['Discovered vulnerabilities','Critical vulnerabilities','High vulnerabilities'];
+const reportHeaders = ['Device','Overdue KEVs','Previous overdue','Change','All KEVs',...vulnerabilityHeaders,'Recent users','Remediation status','ServiceNow tickets','Escalation','Escalation reason','Circumstances','Notes','Last reviewed','Review','Exposure','OS','Identity match','SFSU Tag','AT Tag','Serial No.','DeviceId'];
 const byId=new Map(payload.tracking.filter(t=>t.DeviceId).map(t=>[t.DeviceId.toLowerCase(),t]));
 const reportRows = payload.report.map(({device:d,previous,recentUsers}) => {
   const t=byId.get(d.DeviceId.toLowerCase());
   if (!t) throw new Error('Device is missing from the register: '+d.DeviceId);
-  return [d.DeviceName,d.OverdueKEVs,previous,null,d.KEVCount,recentUsers||'',t.RemediationStatus,t.ServiceNowTickets,t.NeedsEscalation,t.EscalationReason,t.Circumstances,t.Notes,t.LastReviewed,null,d.ExposureLevel||'',d.OSPlatform||'',t.IdentityMatch,t.SFSUTag||'',t.ATTag||'',t.SerialNo||'',d.DeviceId];
+  return [d.DeviceName,d.OverdueKEVs,previous,null,d.KEVCount,...vulnerabilityFields.map(field=>d[field]??null),recentUsers||'',t.RemediationStatus,t.ServiceNowTickets,t.NeedsEscalation,t.EscalationReason,t.Circumstances,t.Notes,t.LastReviewed,null,d.ExposureLevel||'',d.OSPlatform||'',t.IdentityMatch,t.SFSUTag||'',t.ATTag||'',t.SerialNo||'',d.DeviceId];
 });
-section(report,'Overdue KEVs by device',`${payload.reportDate}. Previous: ${payload.previousDate || 'unavailable'}. Prior legacy counts use unique full-name matches; later runs use DeviceId.`,reportHeaders,reportRows,'WeeklyReport');
+section(report,'Vulnerabilities by device',`${payload.reportDate}. Previous: ${payload.previousDate || 'unavailable'}. All exported devices, including zero counts. Blank vulnerability counts mean unavailable.`,reportHeaders,reportRows,'WeeklyReport');
 report.tabColor='#243E55';
-report.getRange('A5:B5').values=[['Devices with overdue KEVs',null]];
+report.getRange('A5:B5').values=[['Report devices',null]];
 report.getRange('D5:E5').values=[['Overdue pairs',null]];
-report.getRange('G5:H5').values=[['Current export devices',payload.summary.sourceDevices]];
+report.getRange('G5:H5').values=[['Devices with overdue KEVs',null]];
 report.getRange('B5').formulas=[[count ? `=COUNT(B${START}:B${last})` : '=0']];
 report.getRange('E5').formulas=[[count ? `=SUM(B${START}:B${last})` : '=0']];
+report.getRange('H5').formulas=[[count ? `=COUNTIF(B${START}:B${last},">0")` : '=0']];
 report.getRange('A5:H5').format.font={name:'Arial',size:10,bold:true,color:'#243E55'};
 report.getRange('A5').format.wrapText=true;
 report.getRange('D5').format.wrapText=true;
 report.getRange('G5').format.wrapText=true;
 report.getRange('A5:H5').format.rowHeight=34;
-report.getRange('A6').values=[['Edit G:M and Q:T (amber headers). Pink rows are new or returning. Save and close before the next refresh.']];
+report.getRange('A6').values=[['Edit J:P and T:W (amber headers). Pink rows are new or returning. Save and close before the next refresh.']];
 report.getRange('A6').format.font={name:'Arial',size:10,italic:true,color:'#526779'};
-for (const range of ['G8:M8','Q8:T8']) report.getRange(range).format.font.color='#FFE3A1';
+for (const range of ['J8:P8','T8:W8']) report.getRange(range).format.font.color='#FFE3A1';
 
 section(tracking,'Device register','Internal register. Edit the Weekly report; saved edits are reconciled on refresh. Absent devices remain here.',payload.trackingHeaders,payload.tracking.map(t=>payload.trackingHeaders.map(h=>h==='LastObservedReportDate'?dateValue(t[h]):t[h]??'')),'DeviceTracking');
 tracking.tabColor='#B78326';
@@ -84,29 +87,30 @@ tracking.getRange(`I${START}:I${trackLast}`).setNumberFormat('mm/dd/yy');
 tracking.getRange(`N${START}:N${trackLast}`).setNumberFormat('mm/dd/yy');
 
 if (count) {
-  report.getRange(`G${START}:M${last}`).format.fill='#FFF2CC';
-  report.getRange(`Q${START}:T${last}`).format.fill='#FFF2CC';
-  report.getRange(`R${START}:T${last}`).setNumberFormat('@');
-  report.getRange(`G${START}:G${last}`).dataValidation={rule:{type:'list',values:['—','Ticket open','In progress','Resolved']}};
-  report.getRange(`I${START}:I${last}`).dataValidation={rule:{type:'list',values:['Yes','No']}};
-  report.getRange(`Q${START}:Q${last}`).dataValidation={rule:{type:'list',values:identityValues}};
-  report.getRange(`M${START}:M${last}`).setNumberFormat('mm/dd/yy');
+  report.getRange(`J${START}:P${last}`).format.fill='#FFF2CC';
+  report.getRange(`T${START}:W${last}`).format.fill='#FFF2CC';
+  report.getRange(`U${START}:W${last}`).setNumberFormat('@');
+  report.getRange(`J${START}:J${last}`).dataValidation={rule:{type:'list',values:['—','Ticket open','In progress','Resolved']}};
+  report.getRange(`L${START}:L${last}`).dataValidation={rule:{type:'list',values:['Yes','No']}};
+  report.getRange(`T${START}:T${last}`).dataValidation={rule:{type:'list',values:identityValues}};
+  report.getRange(`P${START}:P${last}`).setNumberFormat('mm/dd/yy');
   const formulas=payload.report.map((entry,i)=>{
     const r=START+i, shared=payload.records.filter(x=>x.DeviceName.trim().toLowerCase()===entry.device.DeviceName.trim().toLowerCase()).length>1;
     return [`=IF(ISNUMBER(C${r}),B${r}-C${r},"")`,
-            `=IF(AND(G${r}="Resolved",B${r}>0),"Resolved; overdue KEVs detected",IF(AND(G${r}="Ticket open",H${r}=""),"Ticket number needed",IF(AND(I${r}="Yes",J${r}=""),"Escalation reason needed",IF(OR(Q${r}="Unique name match; verify",Q${r}="Unverified DeviceId"),"Verify migrated identity",${shared ? '"Shared hostname; use DeviceId"' : `IF(I${r}="Yes","Needs escalation","")` }))))`];
+            `=IF(AND(J${r}="Resolved",B${r}>0),"Resolved; overdue KEVs detected",IF(AND(J${r}="Ticket open",K${r}=""),"Ticket number needed",IF(AND(L${r}="Yes",M${r}=""),"Escalation reason needed",IF(OR(T${r}="Unique name match; verify",T${r}="Unverified DeviceId"),"Verify migrated identity",${shared ? '"Shared hostname; use DeviceId"' : `IF(L${r}="Yes","Needs escalation","")` }))))`];
   });
   report.getRange(`D${START}:D${last}`).formulas=formulas.map(x=>[x[0]]);
-  report.getRange(`N${START}:N${last}`).formulas=formulas.map(x=>[x[1]]);
+  report.getRange(`Q${START}:Q${last}`).formulas=formulas.map(x=>[x[1]]);
   report.getRange(`B${START}:E${last}`).setNumberFormat('#,##0');
   report.getRange(`D${START}:D${last}`).setNumberFormat('+#,##0;-#,##0;0');
-  report.getRange(`F${START}:F${last}`).format.wrapText=true;
-  report.getRange(`J${START}:L${last}`).format.wrapText=true;
+  report.getRange(`F${START}:H${last}`).setNumberFormat('#,##0');
+  report.getRange(`I${START}:I${last}`).format.wrapText=true;
+  report.getRange(`M${START}:O${last}`).format.wrapText=true;
   payload.report.forEach((entry,index)=>{
     const t=byId.get(entry.device.DeviceId.toLowerCase());
-    if (['New','Returning'].includes(entry.appearance)) report.getRange(`A${START+index}:U${START+index}`).format.fill='#F4B6D2';
+    if (['New','Returning'].includes(entry.appearance)) report.getRange(`A${START+index}:X${START+index}`).format.fill='#F4B6D2';
     const lines=Math.max(1,Math.ceil((entry.recentUsers||'').length/65),Math.ceil((t.Notes||'').length/45),Math.ceil((t.EscalationReason||'').length/42));
-    if (lines>1) report.getRange(`A${START+index}:U${START+index}`).format.rowHeight=lines*17+8;
+    if (lines>1) report.getRange(`A${START+index}:X${START+index}`).format.rowHeight=lines*17+8;
   });
 }
 
@@ -116,9 +120,9 @@ function statusFormatting(sheet,statusCol,escalationCol,end) {
   sheet.getRange(`${escalationCol}${START}:${escalationCol}${end}`).conditionalFormats.addCustom(`$${escalationCol}${START}="Yes"`,{fill:colors.Blue,font:{bold:true}});
 }
 if (count) {
-  statusFormatting(report,'G','I',last);
-  report.getRange(`A${START}:A${last}`).conditionalFormats.addCustom(`$I${START}="Yes"`,{fill:colors.Blue});
-  report.getRange(`N${START}:N${last}`).conditionalFormats.addCustom(`$G${START}="Resolved"`,{fill:'#FFE2DE',font:{color:'#A12718',bold:true}});
+  statusFormatting(report,'J','L',last);
+  report.getRange(`A${START}:A${last}`).conditionalFormats.addCustom(`$L${START}="Yes"`,{fill:colors.Blue});
+  report.getRange(`Q${START}:Q${last}`).conditionalFormats.addCustom(`$J${START}="Resolved"`,{fill:'#FFE2DE',font:{color:'#A12718',bold:true}});
 }
 statusFormatting(tracking,'C','D',trackLast);
 
@@ -147,6 +151,16 @@ for (const [sheet,headers,names,end] of [
     sheet.getRange(`${col}1:${col}${end}`).format.columnWidthPx=name.includes('Serial')?180:125;
   }
 }
+for (const [sheet,headers,names,end] of [
+  [tracking,payload.trackingHeaders,vulnerabilityFields.map(field=>'Last'+field),trackLast],
+  [history,payload.historyHeaders,vulnerabilityHeaders,historyLast],
+]) {
+  for (const name of names) {
+    const col=column(headers.indexOf(name));
+    sheet.getRange(`${col}${START}:${col}${end}`).setNumberFormat('#,##0');
+    sheet.getRange(`${col}1:${col}${end}`).format.columnWidthPx=130;
+  }
+}
 
 const guideRows=[
   ['Report date',payload.reportDate],
@@ -157,7 +171,9 @@ const guideRows=[
   ['Editing model','Weekly report'],
   ['Snapshot id',payload.snapshotId],
   ['Generated UTC',payload.generatedUtc],
-  ['Report scope','Current export records with OverdueKEVs > 0. Defender import keeps all KEV-bearing devices, including those not yet overdue. Devices with no KEVs are not in this source.'],
+  ['Report scope','Weekly report includes every device in the selected export, including zero counts. The expanded query includes devices from recent inventory or vulnerability data. Older exports retain their original, narrower coverage.'],
+  ['Discovered vulnerabilities','Distinct vulnerability IDs per device across all affected software, including non-KEVs. Critical and High are separate subsets using the highest reported severity per device/vulnerability. Counts are observations at export time, not lifetime totals or a guarantee of assessment coverage.'],
+  ['Unavailable counts','Blank Discovered/Critical/High values mean the export or older snapshot did not supply those observations. Zero means no matching vulnerability records were returned. Old snapshots are never backfilled with current counts.'],
   ['Weekly step 1','Edit the columns with amber headers on Weekly report. Save and close the workbook. Select this saved workbook as the previous report during the next refresh.'],
   ['Weekly step 2','Export DevicesByKEV.kql from Defender as CSV. CSV and XLSX exports are accepted. The revised query has not been executed against the University tenant; validate it in Advanced Hunting first.'],
   ['Weekly step 3','Double-click Refresh-KEVReport.cmd. Choose the Defender CSV/XLSX export, previous XLSX report, report date, output folder and filename, then Create report. Command-line examples are in Refresh-KEVReport.ps1.'],
@@ -170,7 +186,7 @@ const guideRows=[
   ['Sorting and imported values','Sort the complete WeeklyReport table normally. Keep each DeviceId attached to its row. Imported device facts are checked against Defender import during refresh; conflicting edits and duplicate IDs stop generation.'],
   ['Copies and conflicts','Use the most recent saved working report. A refresh reads one previous workbook. Changes in separate copies are not merged automatically. Disagreements between edited report values and the backing register are flagged.'],
   ['Archived input','The refresh utility archives the previous saved workbook under archive beside the CMD launcher before generating the next report. Existing outputs are never overwritten.'],
-  ['Color meanings','Pink rows: new or returning to Weekly report compared with the previous saved Weekly report, including returns after zero overdue KEVs. Yellow: Ticket open. Orange: In progress. Green: recorded Resolved. Blue device/escalation cells: progress is difficult. Status and escalation colors take priority in their cells.'],
+  ['Color meanings','Pink rows: new or returning to Weekly report compared with the previous saved Weekly report, including rows newly included when upgrading from an overdue-only report. Devices remain on Weekly report at zero counts. Yellow: Ticket open. Orange: In progress. Green: recorded Resolved. Blue device/escalation cells: progress is difficult. Status and escalation colors take priority in their cells.'],
   ['Unset status','— means no remediation status selected. Old Unspecified values and blank status cells become — on refresh. A ticket reference alone does not prove that the ticket is open.'],
   ['Identity migration',`${payload.tracking.filter(t=>t.IdentityMatch==='Unique name match; verify').length} tracking records have candidate unique-name matches. Verify DeviceId, then choose Verified DeviceId in the Weekly report Identity match column.`],
   ['Unmatched identities','Unmatched legacy tracking rows retain a blank DeviceId. A later unique name match is a candidate requiring review. Existing populated DeviceIds are never reassigned by hostname.'],
@@ -204,7 +220,7 @@ guide.getRange(`B${START}:B${START+guideRows.length-1}`).format.verticalAlignmen
 guide.getRange(`B${START+guideRows.findIndex(row=>row[0]==='Generated UTC')}`).setNumberFormat('mm/dd/yy hh:mm:ss');
 
 // Widths reserve the first screen for actionable report fields.
-for (const [col,pixels] of Object.entries({A:290,B:80,C:90,D:65,E:65,F:460,G:125,H:140,I:95,J:280,K:145,L:300,M:115,N:245,O:85,P:105,Q:210,R:125,S:125,T:180,U:320})) report.getRange(`${col}1:${col}${Math.max(last,9)}`).format.columnWidthPx=pixels;
+for (const [col,pixels] of Object.entries({A:290,B:80,C:90,D:65,E:65,F:125,G:115,H:115,I:460,J:125,K:140,L:95,M:280,N:145,O:300,P:115,Q:245,R:85,S:105,T:210,U:125,V:125,W:180,X:320})) report.getRange(`${col}1:${col}${Math.max(last,9)}`).format.columnWidthPx=pixels;
 for (const [col,pixels] of Object.entries({A:320,B:290,C:125,D:135,E:260,F:145,G:140,H:270,I:105,J:200,K:95,L:450})) tracking.getRange(`${col}1:${col}${trackLast}`).format.columnWidthPx=pixels;
 source.getRange(`A1:A${sourceLast}`).format.columnWidthPx=320;
 source.getRange(`B1:B${sourceLast}`).format.columnWidthPx=290;
@@ -220,10 +236,10 @@ if (queue.length) {
 for (const [col,pixels] of Object.entries({A:110,B:290,C:125,D:145,E:90,F:80,G:100,H:135,I:260,J:300,K:95,L:280,M:150,N:115,O:320,P:300,Q:180,R:210,S:460,T:460,U:320})) history.getRange(`${col}1:${col}${historyLast}`).format.columnWidthPx=pixels;
 history.getRange(`I${START}:M${historyLast}`).format.wrapText=true;
 history.getRange(`Y1:Y${historyLast}`).format.columnWidthPx=145;
-history.getRange(`A${START}:Y${historyLast}`).format.rowHeight=38;
+history.getRange(`A${START}:AB${historyLast}`).format.rowHeight=38;
 payload.history.forEach((row,index)=>{
   const lines=Math.max(1,Math.ceil((row['Changed fields']||'').length/38),Math.ceil((row.Notes||'').length/45),Math.ceil((row['Escalation reason']||'').length/42));
-  if(lines>2) history.getRange(`A${START+index}:Y${START+index}`).format.rowHeight=lines*17+8;
+  if(lines>2) history.getRange(`A${START+index}:AB${START+index}`).format.rowHeight=lines*17+8;
 });
 report.freezePanes.freezeColumns(1);
 history.freezePanes.freezeColumns(2);
@@ -231,8 +247,8 @@ guide.getRange(`A1:A${START+guideRows.length}`).format.columnWidthPx=235;
 guide.getRange(`B1:B${START+guideRows.length}`).format.columnWidthPx=990;
 
 wb.recalculate();
-const expected = {devices:count,overdue:payload.summary.overdue};
-const actual = {devices:report.getRange('B5').values[0][0],overdue:report.getRange('E5').values[0][0]};
+const expected = {devices:count,overdue:payload.summary.overdue,overdueDevices:payload.report.filter(entry=>entry.device.OverdueKEVs>0).length};
+const actual = {devices:report.getRange('B5').values[0][0],overdue:report.getRange('E5').values[0][0],overdueDevices:report.getRange('H5').values[0][0]};
 if (JSON.stringify(actual)!==JSON.stringify(expected)) throw new Error(`Summary mismatch ${JSON.stringify({actual,expected})}`);
 if (count) {
   const changes=report.getRange(`D${START}:D${last}`).values;
@@ -240,9 +256,13 @@ if (count) {
     const expectedChange=entry.previous===null || entry.previous===undefined ? '' : entry.device.OverdueKEVs-entry.previous;
     if (changes[index][0]!==expectedChange) throw new Error('Previous-count comparison failed, including zero/blank handling.');
   });
+  const vulnerabilityValues=report.getRange(`F${START}:H${last}`).values;
+  payload.report.forEach((entry,index)=>vulnerabilityFields.forEach((field,col)=>{
+    if ((vulnerabilityValues[index][col]??'')!==(entry.device[field]??'')) throw new Error('Vulnerability count changed during workbook generation: '+field);
+  }));
 }
 const errors=await wb.inspect({kind:'match',searchTerm:'#REF!|#DIV/0!|#VALUE!|#NAME\\?|#N/A|#NUM!|#NULL!|#SPILL!|#CALC!',options:{useRegex:true,maxResults:50},maxChars:4000,summary:'Formula error scan'});
-const inspect=await wb.inspect({kind:'table',range:'Weekly report!A8:J15',include:'values,formulas',tableMaxRows:8,tableMaxCols:10,maxChars:6000});
+const inspect=await wb.inspect({kind:'table',range:'Weekly report!A8:K15',include:'values,formulas',tableMaxRows:8,tableMaxCols:11,maxChars:7000});
 const outDir=path.dirname(outputPath);
 await fs.mkdir(outDir,{recursive:true});
 const validationDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..','validation');
@@ -251,7 +271,7 @@ await fs.writeFile(path.join(validationDir,'formula-scan.ndjson'),errors.ndjson)
 await fs.writeFile(path.join(validationDir,'report-inspect.ndjson'),inspect.ndjson);
 // Render a bounded preview so long source/notes columns do not create a huge image.
 if (process.env.KEV_SKIP_PREVIEW!=='1') {
-  for (const [sheetName,range,file] of [['Weekly report','A1:J17','weekly-report.png'],['Weekly report','N8:U17','weekly-assets.png'],['History','A1:J15','history.png'],['History','V8:Y15','history-assets.png'],['Tracking','A1:J15','tracking.png'],['Defender import','A1:J13','defender-import.png'],['Review','A1:D15','review.png'],['Guide','A1:B18','guide.png']]) {
+  for (const [sheetName,range,file] of [['Weekly report','A1:K17','weekly-report.png'],['Weekly report','Q8:X17','weekly-assets.png'],['History','A1:J15','history.png'],['History','V8:AB15','history-assets.png'],['Tracking','A1:J15','tracking.png'],['Defender import','A1:J13','defender-import.png'],['Review','A1:D15','review.png'],['Guide','A1:B20','guide.png']]) {
     const preview=await wb.render({sheetName,range,scale:1,format:'png'});
     await fs.writeFile(path.join(validationDir,file),new Uint8Array(await preview.arrayBuffer()));
   }

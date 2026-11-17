@@ -7,6 +7,7 @@ See the [project runbook](PROJECT-RUNBOOK.md) for weekly operation, setup, troub
 ## What it does
 
 - Imports Defender CSV or XLSX results and ranks devices by overdue CISA Known Exploited Vulnerabilities (KEVs).
+- Includes every exported device, including zero counts, with Discovered, Critical and High vulnerability counts alongside the KEV measures.
 - Lets staff edit status, ServiceNow ticket references, escalation details, notes, review dates, SFSU Tag, AT Tag and Serial No. on the **Weekly report** sheet.
 - Carries saved edits forward by **DeviceId**, including intentional clearing of fields.
 - Retains absent devices in a hidden **Tracking** register and records periodic snapshots and saved edits in **History**.
@@ -53,13 +54,19 @@ For command-line use:
 
 ## Workbook behavior
 
-**Weekly report** shows records with `OverdueKEVs > 0`. Its manual fields are values, and the colors and row review message react immediately to edits. Imported device facts and DeviceId must stay attached to the correct row; sort the complete table.
+**Weekly report** shows every device in the selected export, including devices with zero KEVs or zero discovered vulnerabilities. It retains overdue KEVs as the first ranking measure. Its manual fields are values, and the colors and row review message react immediately to edits. Imported device facts and DeviceId must stay attached to the correct row; sort the complete table.
+
+**Discovered vulnerabilities**, **Critical vulnerabilities** and **High vulnerabilities** follow **All KEVs**. These are distinct vulnerability IDs per device across affected software. Critical and High are separate subsets; if software records disagree on severity, the query uses the highest reported severity for that device/vulnerability. These imported fields are not manually editable.
+
+Run the updated `DevicesByKEV.kql` to populate all three measures while retaining the KEV fields required by the tool. Despite its existing filename, the query now includes devices found in either recent inventory or vulnerability data. The standalone sample query from the design discussion does not include the KEV fields required for refresh. Zero counts mean no matching vulnerability records were returned and do not confirm assessment coverage.
+
+Previous reports and older KEV exports remain accepted. Counts absent from an older export or history snapshot stay blank, meaning unavailable. Existing history and saved manual edits are retained; current counts are never inserted into older snapshots. Older exports retain their original device coverage. New workbooks use schema 4; continue processing them with the updated utility.
 
 Remediation status defaults to **—**. Blank status cells and older `Unspecified` values become **—** on refresh. **SFSU Tag**, **AT Tag** and **Serial No.** sit together immediately before DeviceId. Enter them manually as text; blank values remain blank. They carry forward by DeviceId from saved weekly reports and are retained in device history, including while a device is absent. Values are never inferred from external exports.
 
 **Tracking** is a hidden device register. **History** retains generated snapshots and saved edits, including the CVE sets available in the export. **Defender import** retains source data, **Review** lists refresh-time exceptions, and **Guide** explains the workflow.
 
-Pink rows mark devices new or returning to Weekly report compared with the previous saved Weekly report, including returns after zero overdue findings. Yellow means ticket open, orange means in progress, green means recorded resolved, and blue marks a device needing escalation. Status and escalation colors take priority in their cells. A recorded resolution with overdue findings is flagged for review. Disappearance from an export does not establish remediation.
+Pink rows mark devices new or returning to Weekly report compared with the previous saved Weekly report. The first refresh from an older, overdue-only report can also introduce rows previously visible only in Defender import. Devices now remain on Weekly report when counts reach zero. Yellow means ticket open, orange means in progress, green means recorded resolved, and blue marks a device needing escalation. Status and escalation colors take priority in their cells. Existing resolution checks remain based on overdue KEVs. Disappearance from an export does not establish remediation.
 
 ## Copying the tool
 
